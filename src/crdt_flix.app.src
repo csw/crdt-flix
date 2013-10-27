@@ -1,0 +1,12 @@
+{application, crdt_flix,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { crdt_flix_app, []}},
+  {env, []}
+ ]}.
