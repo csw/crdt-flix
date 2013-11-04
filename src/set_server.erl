@@ -1,18 +1,22 @@
 %%%-------------------------------------------------------------------
-%%% @author Clayton Smith Wheeler <cswh@dc3nep86.dc.umich.edu>
-%%% @copyright (C) 2013, Clayton Smith Wheeler
+%%% @author Clayton Wheeler <cswh@umich.edu>
+%%% @copyright (C) 2013, Clayton Wheeler
 %%% @doc
 %%%
 %%% @end
-%%% Created : 27 Oct 2013 by Clayton Smith Wheeler <cswh@dc3nep86.dc.umich.edu>
+%%% Created :  3 Nov 2013 by Clayton Wheeler <cswh@umich.edu>
 %%%-------------------------------------------------------------------
--module(crdt_server).
+-module(set_server).
 
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, stop/0]).
--export([info/0, read/0, update/1]).
+-export([start_link/1]).
+-export([read/0, add/1, remove/2]).
+-export([size/0]).
+
+%% Private interface for error_sim
+-export([service_call/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -24,6 +28,20 @@
 %%% API
 %%%===================================================================
 
+-spec read() -> {ok, [term()], binary()}.
+read() ->
+    error_sim:wrap_call(?MODULE, {read}).
+
+-spec add(term()) -> {ok, term()}.
+add(Value) ->
+    error_sim:wrap_call(?MODULE, {add, Value}).
+
+remove(Value, Context) ->
+    error_sim:wrap_call(?MODULE, {remove, Value, Context}).
+
+size() ->
+    gen_server:call(?MODULE, {size}).
+
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -31,26 +49,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Mod) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, Mod, [{debug, [log]}]).
-
-stop() ->
-    gen_server:call(?SERVER, stop).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% @spec
-%% @end
-%%--------------------------------------------------------------------
-
-info() ->
-    gen_server:call(?MODULE, {info}).
-
-read() ->
-    gen_server:call(?MODULE, {read}).
-
-update(Value) ->
-    gen_server:call(?MODULE, {update, Value}).
+start_link({Mod, ID}) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, {Mod, ID}, []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -67,8 +67,8 @@ update(Value) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init(Mod) ->
-    {ok, {Mod, Mod:new()}}.
+init({Mod, ID, EParams}) ->
+    {ok, {Mod, ID, Mod:new(), EParams}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -84,21 +84,25 @@ init(Mod) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({info}, _From, State={Mod, Val}) ->
-    {reply, {ok, Mod, size(term_to_binary(Val))}, State};
-handle_call({read}, _From, State={_Mod, Val}) ->
-    Reply = {ok, Val},
-    {reply, Reply, State};
-handle_call({update, NewVal}, _From, {Mod, Val}) ->
-    Merged = Mod:merge(Val, NewVal),
-    Reply = case Mod:equal(Merged, NewVal) of
-                true  -> {ok, current};
-                false -> {ok, Merged}
-            end,
-    {reply, Reply, {Mod, NewVal}};
-handle_call(stop, _From, State) ->
-    {stop, normal, ok, State}.
+handle_call({size}, _From, State={_Mod, _ID, Set, _EParams}) ->
+    {reply, length(term_to_binary(Set)), State};
+handle_call(Req, From, State={_Mod, _ID, _Set, EParams}) ->
+    error_sim:handle_call(Req, From, State,
+                          set_server, service_call, EParams).
 
+service_call({read}, _From, State={Mod, _ID, Set, _EParams}) ->
+    Reply = {ok, Mod:value(Set), term_to_binary(Set)},
+    {reply, Reply, State};
+service_call({add, Val}, _From, {Mod, ID, Set, EParams}) ->
+    {ok, SetU} = Mod:update({add, Val}, ID, Set),
+    Reply = {ok, Mod:value(SetU), term_to_binary(SetU)},
+    {reply, Reply, {Mod, ID, SetU, EParams}};
+service_call({remove, Val, Ctx}, _From, {Mod, ID, Set, EParams}) ->
+    {ok, SetRm} = Mod:update({remove, Val},
+                             binary_to_term(Ctx)),
+    SetM = Mod:merge(Set, SetRm),
+    Reply = {ok, Mod:value(SetM), term_to_binary(SetM)},
+    {reply, Reply, {Mod, ID, SetM, EParams}}.
 
 
 %%--------------------------------------------------------------------
@@ -111,8 +115,8 @@ handle_call(stop, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast(stop, State) ->
-    {stop, normal, State}.
+handle_cast(_Msg, State) ->
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -138,7 +142,7 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(normal, _State) ->
+terminate(_Reason, _State) ->
     ok.
 
 %%--------------------------------------------------------------------
