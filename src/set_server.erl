@@ -11,9 +11,9 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1]).
+-export([start_link/2, start_link/3, stop/0]).
 -export([read/0, add/1, remove/2]).
--export([size/0]).
+-export([size/0, item_count/0]).
 
 %% Private interface for error_sim
 -export([service_call/3]).
@@ -42,6 +42,10 @@ remove(Value, Context) ->
 size() ->
     gen_server:call(?MODULE, {size}).
 
+-spec item_count() -> integer().
+item_count() ->
+    gen_server:call(?MODULE, item_count).
+
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -49,8 +53,15 @@ size() ->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link({Mod, ID}) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, {Mod, ID}, []).
+start_link(Mod, ID) ->
+    start_link(Mod, ID, {0.0, 1.0, 0}).
+
+start_link(Mod, ID, EParams) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, {Mod, ID, EParams}, []).
+
+stop() ->
+    gen_server:call(?SERVER, stop).
+
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -86,6 +97,10 @@ init({Mod, ID, EParams}) ->
 %%--------------------------------------------------------------------
 handle_call({size}, _From, State={_Mod, _ID, Set, _EParams}) ->
     {reply, length(term_to_binary(Set)), State};
+handle_call(item_count, _From, State={Mod, _ID, Set, _EParams}) ->
+    {reply, length(Mod:value(Set)), State};
+handle_call(stop, _From, State) ->
+    {stop, normal, ok, State};
 handle_call(Req, From, State={_Mod, _ID, _Set, EParams}) ->
     error_sim:handle_call(Req, From, State,
                           set_server, service_call, EParams).
@@ -99,6 +114,7 @@ service_call({add, Val}, _From, {Mod, ID, Set, EParams}) ->
     {reply, Reply, {Mod, ID, SetU, EParams}};
 service_call({remove, Val, Ctx}, _From, {Mod, ID, Set, EParams}) ->
     {ok, SetRm} = Mod:update({remove, Val},
+                             ID,
                              binary_to_term(Ctx)),
     SetM = Mod:merge(Set, SetRm),
     Reply = {ok, Mod:value(SetM), term_to_binary(SetM)},
@@ -142,7 +158,7 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(normal, _State) ->
     ok.
 
 %%--------------------------------------------------------------------
